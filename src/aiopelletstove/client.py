@@ -1,0 +1,231 @@
+"""Async HTTP client for the register protocol."""
+
+import asyncio
+from collections.abc import Sequence
+from types import TracebackType
+from typing import Literal, Self
+
+import aiohttp
+from yarl import URL
+
+from . import registers as r
+from .const import (
+    API_KEY_GET_REGISTERS,
+    API_KEY_SET_REGISTER,
+    API_KEY_TOGGLE_POWER,
+)
+from .exceptions import (
+    PelletStoveConnectionError,
+    PelletStoveResponseError,
+    PelletStoveValueError,
+)
+from .models import FanRegulation, PowerState, StoveState
+
+
+class PelletStove:
+    """A stove client; injected sessions remain owned by their caller."""
+
+    def __init__(
+        self,
+        host: str,
+        *,
+        session: aiohttp.ClientSession | None = None,
+        timeout: float = 5.0,
+    ) -> None:
+        try:
+            url = URL(f"http://{host}")
+            if (
+                not url.host
+                or url.user is not None
+                or url.path not in ("", "/")
+                or url.query_string
+                or url.fragment
+                or "/" in host
+            ):
+                raise ValueError("Expected a hostname with optional port")
+            _ = url.port
+        except ValueError as err:
+            raise PelletStoveValueError("Invalid stove host") from err
+        self._base_url = str(url).rstrip("/")
+        self._session = session
+        self._owns_session = session is None
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
+        self._command_lock = asyncio.Lock()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.async_close()
+
+    async def async_close(self) -> None:
+        """Close only a session created by this client."""
+        if self._owns_session and self._session is not None:
+            await self._session.close()
+            self._session = None
+
+    async def _post(self, path: str, data: dict[str, str]) -> dict[str, object]:
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        try:
+            async with self._session.post(
+                self._base_url + path,
+                data=data,
+                timeout=self._timeout,
+            ) as response:
+                response.raise_for_status()
+                try:
+                    payload: object = await response.json(content_type=None)
+                except (ValueError, UnicodeError) as err:
+                    raise PelletStoveResponseError("Invalid JSON response") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise PelletStoveConnectionError("Stove request failed") from err
+        if not isinstance(payload, dict) or payload.get("result") is False:
+            raise PelletStoveResponseError("Invalid or rejected stove response")
+        return payload
+
+    async def _fetch_category(self, category: int) -> dict[tuple[r.Memory, int], int]:
+        payload = await self._post(
+            "/ajax/get-registers",
+            {
+                "key": API_KEY_GET_REGISTERS,
+                "category": str(category),
+            },
+        )
+        result: dict[tuple[r.Memory, int], int] = {}
+        for memory in ("ram", "eep"):
+            rows = payload.get(memory, [])
+            if not isinstance(rows, list):
+                raise PelletStoveResponseError("Invalid register array")
+            for row in rows:
+                if (
+                    not isinstance(row, list)
+                    or len(row) < 3
+                    or type(row[1]) is not int
+                    or type(row[2]) is not int
+                ):
+                    raise PelletStoveResponseError("Invalid register row")
+                mem: r.Memory = "ram" if memory == "ram" else "eep"
+                result[(mem, row[1])] = row[2]
+        return result
+
+    async def async_read_many(self, regs: Sequence[r.Register]) -> dict[str, r.Value]:
+        """Fetch each distinct category once, rejecting incomplete responses."""
+        raw: dict[tuple[r.Memory, int], int] = {}
+        for category in dict.fromkeys(reg.category for reg in regs):
+            raw.update(await self._fetch_category(category))
+        result: dict[str, r.Value] = {}
+        for reg in regs:
+            try:
+                value = raw[(reg.memory, reg.reg_id)]
+                if reg.high_byte_reg_id is not None:
+                    value = r.combine_bytes(
+                        value, raw[(reg.memory, reg.high_byte_reg_id)]
+                    )
+            except KeyError as err:
+                raise PelletStoveResponseError(f"Missing register: {reg.name}") from err
+            result[reg.name] = r.decode(reg, value)
+        return result
+
+    async def async_read(self, reg: r.Register) -> r.Value:
+        return (await self.async_read_many((reg,)))[reg.name]
+
+    async def _write(self, reg: r.Register, value: r.Value) -> r.Value:
+        raw = r.encode(reg, value)
+        response = await self._post(
+            "/ajax/set-register",
+            {
+                "key": API_KEY_SET_REGISTER,
+                "memory": "0" if reg.memory == "ram" else "1",
+                "regId": str(reg.reg_id),
+                "value": str(raw),
+            },
+        )
+        if response.get("result") is not True:
+            raise PelletStoveResponseError("Write was not acknowledged")
+        return await self.async_read(reg)
+
+    async def async_write(self, reg: r.Register, value: r.Value) -> r.Value:
+        """Write and return the decoded readback."""
+        async with self._command_lock:
+            return await self._write(reg, value)
+
+    async def _toggle(self) -> bool:
+        response = await self._post(
+            "/ajax/get-registers", {"key": API_KEY_TOGGLE_POWER}
+        )
+        if response.get("result") is not True:
+            raise PelletStoveResponseError("Toggle was not acknowledged")
+        return True
+
+    async def async_toggle_power(self) -> bool:
+        """Send the raw toggle command; prefer async_set_power for controls."""
+        async with self._command_lock:
+            return await self._toggle()
+
+    async def async_set_power(self, on: bool) -> None:
+        """Read before toggling, with no action during final cleaning."""
+        async with self._command_lock:
+            try:
+                state = PowerState(int(await self.async_read(r.POWER_STATE)))
+            except ValueError as err:
+                raise PelletStoveResponseError("Unknown power state") from err
+            if state != PowerState.FINAL_CLEANING and state.is_on != on:
+                await self._toggle()
+
+    async def async_set_fan_regulation(
+        self,
+        which: Literal["fan2", "fan3"],
+        value: str,
+    ) -> None:
+        try:
+            selected = FanRegulation(value)
+        except ValueError as err:
+            raise PelletStoveValueError("Invalid fan regulation") from err
+        if which not in ("fan2", "fan3"):
+            raise PelletStoveValueError("Unknown fan channel")
+        async with self._command_lock:
+            fan2, fan3 = r.unpack_fans(int(await self.async_read(r.FAN_REGULATION)))
+            packed = r.pack_fans(
+                selected if which == "fan2" else fan2,
+                selected if which == "fan3" else fan3,
+            )
+            await self._write(r.FAN_REGULATION, packed)
+
+    async def async_get_state(self, *, include_diagnostics: bool = True) -> StoveState:
+        """Fetch common/preferences and optionally the slow diagnostic counters."""
+        regs: tuple[r.Register, ...] = r.COMMON_REGISTERS + r.PREFERENCE_REGISTERS
+        if include_diagnostics:
+            regs += r.DIAGNOSTIC_REGISTERS
+        values = await self.async_read_many(regs)
+        try:
+            power_state = PowerState(int(values["power_state"]))
+        except ValueError as err:
+            raise PelletStoveResponseError("Unknown power state") from err
+        fan2, fan3 = r.unpack_fans(int(values["fan_regulation"]))
+        off = power_state == PowerState.OFF
+        return StoveState(
+            air_temperature=float(values["air_temperature"]),
+            flue_temperature=0 if off else int(values["flue_temperature"]),
+            power_state=power_state,
+            current_power=0 if off else int(values["current_power"]),
+            fan_speed=0 if off else int(values["fan_speed"]),
+            target_temperature=int(values["target_temperature"]),
+            power_level=int(values["power_level"]),
+            standby_mode=bool(values["standby_mode"]),
+            buzzer=bool(values["buzzer"]),
+            enable_fan=bool(values["enable_fan"]),
+            fan2_regulation=fan2,
+            fan3_regulation=fan3,
+            last_alarm=int(values["last_alarm"]) if include_diagnostics else None,
+            total_hours=int(values["total_hours"]) if include_diagnostics else None,
+            partial_hours=int(values["partial_hours"]) if include_diagnostics else None,
+            ignition_count=int(values["ignition_count"])
+            if include_diagnostics
+            else None,
+        )
