@@ -57,7 +57,8 @@ python3.13 -m venv .venv
 ```
 
 Tests use invented register frames and intercepted HTTP requests; no device is
-needed. Tagged `v*` releases build a wheel/sdist and use PyPI trusted publishing.
+needed. Development dependencies limit aiohttp to below 3.14 while aioresponses
+adapts to its changed response constructor; the runtime dependency supports aiohttp 3.x. Tagged `v*` releases build a wheel/sdist and use PyPI trusted publishing.
 Before publishing, confirm package name availability and configure the PyPI
 project, GitHub environment `pypi`, and OIDC publisher. No publishing is needed
 for local development.
