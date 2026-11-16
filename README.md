@@ -35,6 +35,14 @@ Other clients controlling the same stove cannot participate in that lock.
 
 `StoveState` is immutable. OFF zeroes stale power, flue temperature, and fan speed.
 Power labels preserve the legacy protocol (`on` for running/ashpan cleaning).
+Unknown power codes retain their integer value in `PowerState`, expose a label
+`unknown_<n>`, and have `is_known=False` and `is_on=False`. They zero stale power,
+flue temperature, and fan speed, and `async_set_power` never toggles them.
+Boolean reads use `bool(raw)`, including nonzero firmware values outside 0/1.
+An unsupported packed fan channel becomes `None`; the other channel and all
+other readings remain available. Boolean writes still require 0/1, and fan writes
+require valid channels (0–6). A channel update is rejected if the other channel
+is unknown, because a valid packed value cannot preserve it.
 Use `async_get_state(include_diagnostics=False)` for fast polling; its optional
 counter fields are `None`. Callers retain prior diagnostics and fetch them on a
 slower cadence. Common and preference categories are always fetched.

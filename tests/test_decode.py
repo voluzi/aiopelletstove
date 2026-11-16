@@ -16,6 +16,7 @@ from aiopelletstove.registers import decode, encode, pack_fans, unpack_fans
         (r.FAN_SPEED, 61, 860),
         (r.STANDBY_MODE, 1, True),
         (r.BUZZER, 0, False),
+        (r.BUZZER, 2, True),
     ],
 )
 def test_decode_transforms(reg, raw, expected):
@@ -33,6 +34,7 @@ def test_decode_transforms(reg, raw, expected):
         (r.POWER_LEVEL, float("nan")),
         (r.BUZZER, 2),
         (r.FAN_REGULATION, 256),
+        (r.FAN_REGULATION, 7),
     ],
 )
 def test_invalid_write_values(reg, value):

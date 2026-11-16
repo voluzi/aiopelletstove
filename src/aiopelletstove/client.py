@@ -171,11 +171,12 @@ class PelletStove:
     async def async_set_power(self, on: bool) -> None:
         """Read before toggling, with no action during final cleaning."""
         async with self._command_lock:
-            try:
-                state = PowerState(int(await self.async_read(r.POWER_STATE)))
-            except ValueError as err:
-                raise PelletStoveResponseError("Unknown power state") from err
-            if state != PowerState.FINAL_CLEANING and state.is_on != on:
+            state = PowerState(int(await self.async_read(r.POWER_STATE)))
+            if (
+                state.is_known
+                and state != PowerState.FINAL_CLEANING
+                and state.is_on != on
+            ):
                 await self._toggle()
 
     async def async_set_fan_regulation(
@@ -191,10 +192,11 @@ class PelletStove:
             raise PelletStoveValueError("Unknown fan channel")
         async with self._command_lock:
             fan2, fan3 = r.unpack_fans(int(await self.async_read(r.FAN_REGULATION)))
-            packed = r.pack_fans(
-                selected if which == "fan2" else fan2,
-                selected if which == "fan3" else fan3,
-            )
+            fan2 = selected if which == "fan2" else fan2
+            fan3 = selected if which == "fan3" else fan3
+            if fan2 is None or fan3 is None:
+                raise PelletStoveValueError("Cannot preserve unknown fan regulation")
+            packed = r.pack_fans(fan2, fan3)
             await self._write(r.FAN_REGULATION, packed)
 
     async def async_get_state(self, *, include_diagnostics: bool = True) -> StoveState:
@@ -203,12 +205,9 @@ class PelletStove:
         if include_diagnostics:
             regs += r.DIAGNOSTIC_REGISTERS
         values = await self.async_read_many(regs)
-        try:
-            power_state = PowerState(int(values["power_state"]))
-        except ValueError as err:
-            raise PelletStoveResponseError("Unknown power state") from err
+        power_state = PowerState(int(values["power_state"]))
         fan2, fan3 = r.unpack_fans(int(values["fan_regulation"]))
-        off = power_state == PowerState.OFF
+        off = power_state == PowerState.OFF or not power_state.is_known
         return StoveState(
             air_temperature=float(values["air_temperature"]),
             flue_temperature=0 if off else int(values["flue_temperature"]),

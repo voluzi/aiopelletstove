@@ -71,8 +71,6 @@ REGISTERS = COMMON_REGISTERS + PREFERENCE_REGISTERS + DIAGNOSTIC_REGISTERS
 
 def decode(reg: Register, raw: int) -> Value:
     if reg.fmt is bool:
-        if raw not in (0, 1):
-            raise PelletStoveResponseError(f"Invalid boolean for {reg.name}")
         return bool(raw)
     value = raw * reg.scale + reg.offset
     return round(value, 1) if reg.fmt is float else int(value)
@@ -93,11 +91,8 @@ def encode(reg: Register, value: Value) -> int:
     if not raw.is_integer() or not 0 <= raw <= 255:
         raise PelletStoveValueError(f"Value cannot be encoded for {reg.name}")
     result = int(raw)
-    if reg == FAN_REGULATION:
-        try:
-            unpack_fans(result)
-        except PelletStoveResponseError as err:
-            raise PelletStoveValueError("Invalid packed fan value") from err
+    if reg == FAN_REGULATION and None in unpack_fans(result):
+        raise PelletStoveValueError("Invalid packed fan value")
     return result
 
 
@@ -107,12 +102,13 @@ def combine_bytes(low: int, high: int) -> int:
     return (high << 8) | low
 
 
-def unpack_fans(raw: int) -> tuple[FanRegulation, FanRegulation]:
+def unpack_fans(raw: int) -> tuple[FanRegulation | None, FanRegulation | None]:
     options = tuple(FanRegulation)
     low, high = raw % 16, raw // 16
-    if not (0 <= low < len(options) and 0 <= high < len(options)):
-        raise PelletStoveResponseError("Invalid packed fan regulation")
-    return options[low], options[high]
+    return (
+        options[low] if 0 <= low < len(options) else None,
+        options[high] if 0 <= high < len(options) else None,
+    )
 
 
 def pack_fans(fan2: FanRegulation, fan3: FanRegulation) -> int:

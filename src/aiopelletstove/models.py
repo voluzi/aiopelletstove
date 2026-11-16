@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
+from typing import Self
 
 
 class PowerState(IntEnum):
@@ -16,13 +17,26 @@ class PowerState(IntEnum):
     ALARM = 8
     ALARM_MEMORY = 9
 
+    @classmethod
+    def _missing_(cls, value: object) -> Self | None:
+        if not isinstance(value, int):
+            return None
+        state = int.__new__(cls, value)
+        state._name_ = f"UNKNOWN_{value}"
+        state._value_ = value
+        return state
+
+    @property
+    def is_known(self) -> bool:
+        return self in POWER_STATE_LABELS
+
     @property
     def is_on(self) -> bool:
         return self in ON_STATES
 
     @property
     def label(self) -> str:
-        return POWER_STATE_LABELS[self]
+        return POWER_STATE_LABELS.get(self, f"unknown_{self.value}")
 
 
 ON_STATES = frozenset(
@@ -70,8 +84,8 @@ class StoveState:
     standby_mode: bool
     buzzer: bool
     enable_fan: bool
-    fan2_regulation: FanRegulation
-    fan3_regulation: FanRegulation
+    fan2_regulation: FanRegulation | None
+    fan3_regulation: FanRegulation | None
     last_alarm: int | None = None
     total_hours: int | None = None
     partial_hours: int | None = None

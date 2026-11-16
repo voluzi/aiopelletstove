@@ -8,6 +8,7 @@ from aiopelletstove import (
     PelletStove,
     PelletStoveConnectionError,
     PelletStoveResponseError,
+    PelletStoveValueError,
     PowerState,
 )
 from aiopelletstove import registers as r
@@ -197,8 +198,65 @@ async def test_http_status_failure(http):
             await stove.async_read(r.POWER_STATE)
 
 
-async def test_unknown_power_state_is_a_response_error(http):
-    http.post(URL, payload={"ram": [[0, 33, 42]], "eep": []})
+@pytest.mark.parametrize("raw", [-1, 10, 42])
+@pytest.mark.parametrize("on", [False, True])
+async def test_unknown_power_state_never_auto_toggles(http, raw, on):
+    http.post(URL, payload={"ram": [[0, 33, raw]], "eep": []})
     async with PelletStove("stove.example") as stove:
-        with pytest.raises(PelletStoveResponseError):
-            await stove.async_set_power(True)
+        await stove.async_set_power(on)
+    calls = [call for group in http.requests.values() for call in group]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "host", ["http://stove.example", "stove.example/path", "", "stove.example:invalid"]
+)
+def test_invalid_host_is_rejected(host):
+    with pytest.raises(PelletStoveValueError):
+        PelletStove(host)
+
+
+async def test_unknown_power_state_preserves_poll(http, frames):
+    frames[2]["ram"][2][2] = 42
+    for category in (2, 11):
+        http.post(URL, payload=frames[category])
+    async with PelletStove("stove.example") as stove:
+        state = await stove.async_get_state(include_diagnostics=False)
+    assert state.power_state.label == "unknown_42"
+    assert not state.power_state.is_on
+    assert (state.current_power, state.flue_temperature, state.fan_speed) == (0, 0, 0)
+    assert state.air_temperature == 21.5
+
+
+@pytest.mark.parametrize(
+    "raw,fan2,fan3", [(103, None, "auto"), (114, "2", None), (119, None, None)]
+)
+async def test_unknown_fan_channels_preserve_poll(http, frames, raw, fan2, fan3):
+    frames[11]["eep"][3][2] = raw
+    for category in (2, 11):
+        http.post(URL, payload=frames[category])
+    async with PelletStove("stove.example") as stove:
+        state = await stove.async_get_state(include_diagnostics=False)
+    assert state.fan2_regulation == fan2
+    assert state.fan3_regulation == fan3
+    assert state.power_state == PowerState.RUNNING
+    assert state.air_temperature == 21.5
+
+
+async def test_nonzero_boolean_preserves_poll(http, frames):
+    frames[11]["eep"][1][2] = 2
+    for category in (2, 11):
+        http.post(URL, payload=frames[category])
+    async with PelletStove("stove.example") as stove:
+        state = await stove.async_get_state(include_diagnostics=False)
+    assert state.buzzer is True
+    assert state.air_temperature == 21.5
+
+
+@pytest.mark.parametrize("which,raw", [("fan2", 114), ("fan3", 103)])
+async def test_fan_write_rejects_unknown_other_channel(http, which, raw):
+    http.post(URL, payload={"ram": [], "eep": [[1, 126, raw]]})
+    async with PelletStove("stove.example") as stove:
+        with pytest.raises(PelletStoveValueError):
+            await stove.async_set_fan_regulation(which, "4")
+    assert all(str(key[1]) != SET_URL for key in http.requests)
