@@ -1,7 +1,7 @@
 # aiopelletstove
 
 [![PyPI version](https://img.shields.io/pypi/v/aiopelletstove)](https://pypi.org/project/aiopelletstove/)
-[![Python versions](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-3776AB)](https://pypi.org/project/aiopelletstove/)
+[![Python versions](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-3776AB)](https://pypi.org/project/aiopelletstove/)
 [![Latest GitHub release](https://img.shields.io/github/v/release/voluzi/aiopelletstove)](https://github.com/voluzi/aiopelletstove/releases/latest)
 [![CI](https://github.com/voluzi/aiopelletstove/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/voluzi/aiopelletstove/actions/workflows/ci.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -76,7 +76,7 @@ other channel.
 ## Compatibility
 
 Requires Python **3.11 or later** and `aiohttp>=3.9,<4`. CI tests Python 3.11,
-3.12, and 3.13. The package includes type information.
+3.12, 3.13, and 3.14. The package includes type information.
 
 The stove's Wi-Fi module and firmware must expose the local HTTP form API
 and the RAM and EEPROM registers defined in this package. Compatibility
