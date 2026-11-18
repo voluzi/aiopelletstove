@@ -18,5 +18,5 @@ from aiopelletstove import PowerState
         (PowerState.ALARM_MEMORY, "alarm_memory"),
     ],
 )
-def test_legacy_power_labels(state, label):
+def test_power_state_labels(state, label):
     assert state.label == label
