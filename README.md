@@ -1,72 +1,96 @@
 # aiopelletstove
 
-Typed, asyncio-native HTTP register client for Wi-Fi pellet stoves using the
-Micronova-style RAM/EEPROM interface. Python 3.11 or newer; MIT licensed.
+[![PyPI version](https://img.shields.io/pypi/v/aiopelletstove)](https://pypi.org/project/aiopelletstove/)
+[![Python versions](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-3776AB)](https://pypi.org/project/aiopelletstove/)
+[![Latest GitHub release](https://img.shields.io/github/v/release/voluzi/aiopelletstove)](https://github.com/voluzi/aiopelletstove/releases/latest)
+[![CI](https://github.com/voluzi/aiopelletstove/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/voluzi/aiopelletstove/actions/workflows/ci.yml)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+A typed asyncio client for reading and controlling Wi-Fi pellet stoves over
+the local Micronova-style HTTP register interface. Read a complete stove state,
+write individual settings, or use the higher level power and fan controls.
+
+## Install
+
+```sh
+python -m pip install aiopelletstove
+```
+
+## Quick start
+
+Set `PELLET_STOVE_HOST` to your stove's local hostname or address before
+running the example.
 
 ```python
 import asyncio
-from aiopelletstove import PelletStove
-from aiopelletstove.registers import TARGET_TEMPERATURE
+import os
+
+from aiopelletstove import PelletStove, StoveState
 
 
-async def main():
-    async with PelletStove("stove.example") as stove:
-        state = await stove.async_get_state()
-        print(state.air_temperature)
-        await stove.async_write(TARGET_TEMPERATURE, 23)
+async def read_stove() -> StoveState:
+    async with PelletStove(os.environ["PELLET_STOVE_HOST"]) as stove:
+        return await stove.async_get_state()
 
 
-asyncio.run(main())
+state = asyncio.run(read_stove())
+print(f"Room temperature: {state.air_temperature:.1f} °C")
+print(f"Power state: {state.power_state.label}")
 ```
 
-The example hostname is reserved for documentation. Supply your own host at
-runtime. Requests use plain HTTP form posts, a five-second timeout, and no
-internal retries. The register interface does not use a login handshake.
+## API
 
-Pass `session=` to reuse an aiohttp session. The caller owns injected sessions;
-the client closes its own session with `async_close()` or an async context manager.
-`async_read` / `async_read_many` decode registers and group reads by category.
-`async_write` validates bounds/read-only status and returns the decoded readback.
-`async_set_power(on)` reads the current state and only toggles when needed;
-final cleaning blocks toggles. `async_toggle_power()` is the raw toggle command.
-`async_set_fan_regulation("fan2", "auto")` preserves the other packed fan channel.
-Commands are serialized within each client, including read-modify-write sequences.
-Other clients controlling the same stove cannot participate in that lock.
+| API | Purpose |
+| --- | --- |
+| `PelletStove(host, *, session=None, timeout=5.0)` | Create a client for a hostname or address with optional port. |
+| `async_get_state(include_diagnostics=True)` | Read common status and preferences into an immutable `StoveState`. Set `include_diagnostics=False` to skip alarm and usage counters; those fields will be `None`. |
+| `async_read(register)`, `async_read_many(registers)` | Read and decode registers. Batch reads issue one request per register category. |
+| `async_write(register, value)` | Validate and write a register, then return the decoded readback. |
+| `async_set_power(on)` | Toggle only when the reported state requires it. Unknown states and final cleaning block toggles. |
+| `async_toggle_power()` | Send the raw toggle command. Prefer `async_set_power` when you know the desired state. |
+| `async_set_fan_regulation(channel, value)` | Set `fan2` or `fan3` to `off`, `1`–`5`, or `auto` while preserving the other channel. |
+| `async_close()` | Close the client-owned session. The async context manager also closes it. |
 
-`StoveState` is immutable. OFF zeroes stale power, flue temperature, and fan speed.
-Power labels preserve the legacy protocol (`on` for running/ashpan cleaning).
-Unknown power codes retain their integer value in `PowerState`, expose a label
-`unknown_<n>`, and have `is_known=False` and `is_on=False`. They zero stale power,
-flue temperature, and fan speed, and `async_set_power` never toggles them.
-Boolean reads use `bool(raw)`, including nonzero firmware values outside 0/1.
-An unsupported packed fan channel becomes `None`; the other channel and all
-other readings remain available. Boolean writes still require 0/1, and fan writes
-require valid channels (0–6). A channel update is rejected if the other channel
-is unknown, because a valid packed value cannot preserve it.
-Use `async_get_state(include_diagnostics=False)` for fast polling; its optional
-counter fields are `None`. Callers retain prior diagnostics and fetch them on a
-slower cadence. Common and preference categories are always fetched.
+Register definitions and encoding helpers live in
+[`aiopelletstove.registers`](src/aiopelletstove/registers.py).
+The caller remains responsible for an injected `aiohttp.ClientSession`.
+Commands are serialized per client; use a single client when coordinating writes.
 
-Errors derive from `PelletStoveError`: connection/timeouts, invalid/rejected
-responses, read-only writes, and invalid values have distinct exception types.
-The library ships `py.typed`; register and encoding helpers are public in
-`aiopelletstove.registers`.
+Unknown power codes retain their integer value with a label of
+`unknown_<code>` and `is_known=False`. The enum reports both active heating and
+ashpan cleaning as `on`. Off and unknown states zero stale power, flue
+temperature, and fan speed. A fan channel with an unsupported code is `None`;
+the client refuses a write that would overwrite an unknown setting on the
+other channel.
 
-## Development
+## Errors
 
-```sh
-python3.13 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/mypy --strict src
-.venv/bin/pytest -q
-.venv/bin/python -m build
-```
+| Error | Meaning |
+| --- | --- |
+| `PelletStoveError` | Base class for client and protocol errors |
+| `PelletStoveConnectionError` | HTTP transport failure or timeout |
+| `PelletStoveResponseError` | Malformed, incomplete, or rejected response |
+| `PelletStoveReadOnlyError` | Attempted write to a read-only register |
+| `PelletStoveValueError` | Invalid host or unsupported or out-of-range input; also a `ValueError` |
 
-Tests use invented register frames and intercepted HTTP requests; no device is
-needed. Development dependencies limit aiohttp to below 3.14 while aioresponses
-adapts to its changed response constructor; the runtime dependency supports aiohttp 3.x. Tagged `v*` releases build a wheel/sdist and use PyPI trusted publishing.
-Before publishing, confirm package name availability and configure the PyPI
-project, GitHub environment `pypi`, and OIDC publisher. No publishing is needed
-for local development.
+## Compatibility
+
+Requires Python **3.11 or later** and `aiohttp>=3.9,<4`. CI tests Python 3.11,
+3.12, and 3.13. The package includes type information.
+
+The stove's Wi-Fi module and firmware must expose the local HTTP form API
+and the RAM and EEPROM registers defined in this package. Compatibility
+depends on the register layout; the package does not verify models by name.
+Requests use plain HTTP with no login handshake or internal retries. A
+timeout applies to each request, so operations spanning several categories
+can take longer than one timeout.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and test instructions,
+[CHANGELOG.md](CHANGELOG.md) for release notes, and [SECURITY.md](SECURITY.md)
+for private vulnerability reporting.
+
+## License
+
+[MIT](LICENSE).
