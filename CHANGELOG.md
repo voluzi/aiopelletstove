@@ -10,9 +10,6 @@ All notable changes to this project are documented here. The format follows
 
 - Typed async register reads, validated writes, and power and fan controls.
 - Immutable state snapshots, optional diagnostics, and specific exception types.
-
-### Fixed
-
 - Keep supported readings available when a power code, fan code, or Boolean
   reading is outside the usual range. Writes still validate their inputs.
 - Block absolute power toggles for unknown power states and zero stale readings.
