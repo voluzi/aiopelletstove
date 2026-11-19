@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-19
+
+### Changed
+
+- `async_set_power` returns a `PowerCommandOutcome` with the result and the
+  power state read under the command lock.
+- `async_set_power` no longer toggles in standby or alarm states, where the
+  effect of the toggle is undocumented.
+
 ## [1.0.0] - 2026-11-18
 
 ### Added
@@ -14,4 +23,5 @@ All notable changes to this project are documented here. The format follows
   reading is outside the usual range. Writes still validate their inputs.
 - Block absolute power toggles for unknown power states and zero stale readings.
 
+[1.1.0]: https://github.com/voluzi/aiopelletstove/tree/v1.1.0
 [1.0.0]: https://github.com/voluzi/aiopelletstove/tree/v1.0.0

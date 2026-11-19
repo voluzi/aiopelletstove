@@ -19,7 +19,14 @@ from .exceptions import (
     PelletStoveResponseError,
     PelletStoveValueError,
 )
-from .models import FanRegulation, PowerState, StoveState
+from .models import (
+    TOGGLE_BLOCKED_STATES,
+    FanRegulation,
+    PowerCommandOutcome,
+    PowerResult,
+    PowerState,
+    StoveState,
+)
 
 
 class PelletStove:
@@ -168,16 +175,21 @@ class PelletStove:
         async with self._command_lock:
             return await self._toggle()
 
-    async def async_set_power(self, on: bool) -> None:
-        """Read before toggling, with no action during final cleaning."""
+    async def async_set_power(self, on: bool) -> PowerCommandOutcome:
+        """Toggle only when needed, judged from a read under the command lock.
+
+        No toggle is sent for unknown states or ``TOGGLE_BLOCKED_STATES``.
+        ``TOGGLED`` means the stove acknowledged the toggle; it typically
+        reports the new power state a minute or more later.
+        """
         async with self._command_lock:
             state = PowerState(int(await self.async_read(r.POWER_STATE)))
-            if (
-                state.is_known
-                and state != PowerState.FINAL_CLEANING
-                and state.is_on != on
-            ):
-                await self._toggle()
+            if not state.is_known or state in TOGGLE_BLOCKED_STATES:
+                return PowerCommandOutcome(PowerResult.BLOCKED, state)
+            if state.is_on == on:
+                return PowerCommandOutcome(PowerResult.UNCHANGED, state)
+            await self._toggle()
+            return PowerCommandOutcome(PowerResult.TOGGLED, state)
 
     async def async_set_fan_regulation(
         self,
