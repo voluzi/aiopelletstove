@@ -70,6 +70,8 @@ other channel.
 | `PelletStoveError` | Base class for client and protocol errors |
 | `PelletStoveConnectionError` | HTTP transport failure or timeout |
 | `PelletStoveResponseError` | Malformed, incomplete, or rejected response |
+| `PelletStoveRejectedError` | Explicit rejection by the stove; a `PelletStoveResponseError` |
+| `PelletStovePowerOutcomeUnknownError` | A power toggle was sent but its acknowledgement was lost or unreadable |
 | `PelletStoveReadOnlyError` | Attempted write to a read-only register |
 | `PelletStoveValueError` | Invalid host or unsupported or out-of-range input; also a `ValueError` |
 
