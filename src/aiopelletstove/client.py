@@ -16,10 +16,19 @@ from .const import (
 )
 from .exceptions import (
     PelletStoveConnectionError,
+    PelletStovePowerOutcomeUnknownError,
+    PelletStoveRejectedError,
     PelletStoveResponseError,
     PelletStoveValueError,
 )
-from .models import FanRegulation, PowerState, StoveState
+from .models import (
+    TOGGLE_BLOCKED_STATES,
+    FanRegulation,
+    PowerCommandOutcome,
+    PowerResult,
+    PowerState,
+    StoveState,
+)
 
 
 class PelletStove:
@@ -85,8 +94,10 @@ class PelletStove:
                     raise PelletStoveResponseError("Invalid JSON response") from err
         except (aiohttp.ClientError, TimeoutError) as err:
             raise PelletStoveConnectionError("Stove request failed") from err
-        if not isinstance(payload, dict) or payload.get("result") is False:
-            raise PelletStoveResponseError("Invalid or rejected stove response")
+        if not isinstance(payload, dict):
+            raise PelletStoveResponseError("Invalid stove response")
+        if payload.get("result") is False:
+            raise PelletStoveRejectedError("Stove rejected the request")
         return payload
 
     async def _fetch_category(self, category: int) -> dict[tuple[r.Memory, int], int]:
@@ -168,16 +179,35 @@ class PelletStove:
         async with self._command_lock:
             return await self._toggle()
 
-    async def async_set_power(self, on: bool) -> None:
-        """Read before toggling, with no action during final cleaning."""
+    async def async_set_power(self, on: bool) -> PowerCommandOutcome:
+        """Toggle only when needed, judged from a read under the command lock.
+
+        No toggle is sent for unknown states or ``TOGGLE_BLOCKED_STATES``.
+        ``TOGGLED`` means the stove acknowledged the toggle; it typically
+        reports the new power state a minute or more later, and the register
+        keeps the old state until then. Callers must not repeat the command in
+        that window: a second toggle cancels the first.
+
+        Raises ``PelletStovePowerOutcomeUnknownError`` when the toggle was sent
+        but its acknowledgement was lost or unreadable, and
+        ``PelletStoveRejectedError`` when the stove explicitly rejected it.
+        Other errors mean no toggle was sent.
+        """
         async with self._command_lock:
             state = PowerState(int(await self.async_read(r.POWER_STATE)))
-            if (
-                state.is_known
-                and state != PowerState.FINAL_CLEANING
-                and state.is_on != on
-            ):
+            if not state.is_known or state in TOGGLE_BLOCKED_STATES:
+                return PowerCommandOutcome(PowerResult.BLOCKED, state)
+            if state.is_on == on:
+                return PowerCommandOutcome(PowerResult.UNCHANGED, state)
+            try:
                 await self._toggle()
+            except PelletStoveRejectedError:
+                raise
+            except (PelletStoveConnectionError, PelletStoveResponseError) as err:
+                raise PelletStovePowerOutcomeUnknownError(
+                    "Power toggle sent without a readable acknowledgement"
+                ) from err
+            return PowerCommandOutcome(PowerResult.TOGGLED, state)
 
     async def async_set_fan_regulation(
         self,
