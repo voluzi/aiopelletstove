@@ -4,7 +4,9 @@ from .client import PelletStove
 from .exceptions import (
     PelletStoveConnectionError,
     PelletStoveError,
+    PelletStovePowerOutcomeUnknownError,
     PelletStoveReadOnlyError,
+    PelletStoveRejectedError,
     PelletStoveResponseError,
     PelletStoveValueError,
 )
@@ -24,7 +26,9 @@ __all__ = [
     "PelletStove",
     "PelletStoveConnectionError",
     "PelletStoveError",
+    "PelletStovePowerOutcomeUnknownError",
     "PelletStoveReadOnlyError",
+    "PelletStoveRejectedError",
     "PelletStoveResponseError",
     "PelletStoveValueError",
     "PowerCommandOutcome",

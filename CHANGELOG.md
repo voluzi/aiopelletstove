@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format follows
   power state read under the command lock.
 - `async_set_power` no longer toggles in standby or alarm states, where the
   effect of the toggle is undocumented.
+- `async_set_power` raises `PelletStovePowerOutcomeUnknownError` when the
+  toggle was sent but its acknowledgement was lost or unreadable, and
+  `PelletStoveRejectedError` (a `PelletStoveResponseError`) when the stove
+  rejects a request.
 
 ## [1.0.0] - 2026-11-18
 

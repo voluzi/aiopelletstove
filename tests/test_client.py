@@ -7,6 +7,8 @@ from aioresponses import CallbackResult
 from aiopelletstove import (
     PelletStove,
     PelletStoveConnectionError,
+    PelletStovePowerOutcomeUnknownError,
+    PelletStoveRejectedError,
     PelletStoveResponseError,
     PelletStoveValueError,
     PowerResult,
@@ -182,7 +184,9 @@ async def test_write_returns_confirmed_readback(http, register, value, raw):
     assert write_calls[0].kwargs["data"]["value"] == str(raw)
 
 
-async def test_concurrent_absolute_power_commands_do_not_double_toggle(http):
+async def test_concurrent_power_commands_serialise_when_readback_is_immediate(http):
+    # The real stove keeps the old state for a minute or more after a toggle;
+    # callers must suppress repeats in that window (see async_set_power).
     state = 0
     toggles = 0
 
@@ -271,3 +275,36 @@ async def test_fan_write_rejects_unknown_other_channel(http, which, raw):
         with pytest.raises(PelletStoveValueError):
             await stove.async_set_fan_regulation(which, "4")
     assert all(str(key[1]) != SET_URL for key in http.requests)
+
+
+@pytest.mark.parametrize(
+    "toggle_reply",
+    [
+        {"exception": aiohttp.ClientConnectionError()},
+        {"body": "not json"},
+        {"payload": {"ok": 1}},
+    ],
+)
+async def test_lost_toggle_acknowledgement_is_unknown_outcome(http, toggle_reply):
+    http.post(URL, payload={"ram": [[0, 33, 0]], "eep": []})
+    http.post(URL, **toggle_reply)
+    async with PelletStove("stove.example") as stove:
+        with pytest.raises(PelletStovePowerOutcomeUnknownError):
+            await stove.async_set_power(True)
+
+
+async def test_rejected_toggle_is_not_unknown_outcome(http):
+    http.post(URL, payload={"ram": [[0, 33, 0]], "eep": []})
+    http.post(URL, payload={"result": False})
+    async with PelletStove("stove.example") as stove:
+        with pytest.raises(PelletStoveRejectedError):
+            await stove.async_set_power(True)
+
+
+async def test_failed_power_read_sends_no_toggle(http):
+    http.post(URL, exception=aiohttp.ClientConnectionError())
+    async with PelletStove("stove.example") as stove:
+        with pytest.raises(PelletStoveConnectionError):
+            await stove.async_set_power(True)
+    calls = [call for group in http.requests.values() for call in group]
+    assert len(calls) == 1
