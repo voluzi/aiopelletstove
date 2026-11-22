@@ -8,8 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Each client sends one request at a time and waits at least 100 ms after a read
+  or 150 ms after a write or toggle before sending the next request. Polling
+  cannot interleave with a command's requests.
 - `async_set_power` returns a `PowerCommandOutcome` with the result and the
-  power state read under the command lock.
+  power state read under the request lock.
 - `async_set_power` no longer toggles in standby or alarm states, where the
   effect of the toggle is undocumented.
 - `async_set_power` raises `PelletStovePowerOutcomeUnknownError` when the

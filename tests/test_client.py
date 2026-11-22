@@ -40,6 +40,106 @@ async def test_state_uses_one_request_per_category(http, frames):
     ]
 
 
+def _register_reply(data, frames):
+    if data["key"] in ("002", "022"):
+        return CallbackResult(payload={"result": True})
+    return CallbackResult(payload=frames[int(data["category"])])
+
+
+async def test_concurrent_poll_power_and_write_never_overlap(http, frames):
+    frames[2]["ram"][2][2] = 0
+    in_flight = peak = 0
+
+    async def respond(url, **kwargs):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        return _register_reply(kwargs["data"], frames)
+
+    http.post(URL, callback=respond, repeat=True)
+    http.post(SET_URL, callback=respond, repeat=True)
+    async with PelletStove("stove.example") as stove, asyncio.timeout(5):
+        await asyncio.gather(
+            stove.async_get_state(),
+            stove.async_set_power(True),
+            stove.async_write(r.TARGET_TEMPERATURE, 24),
+        )
+    assert peak == 1
+
+
+async def test_requests_observe_minimum_idle_gaps(http, frames):
+    clock = asyncio.get_running_loop().time
+    requests = []
+
+    async def respond(url, **kwargs):
+        data = kwargs["data"]
+        start = clock()
+        await asyncio.sleep(0.025)
+        requests.append((data["key"], start, clock()))
+        return _register_reply(data, frames)
+
+    http.post(URL, callback=respond, repeat=True)
+    http.post(SET_URL, callback=respond, repeat=True)
+    async with PelletStove("stove.example") as stove, asyncio.timeout(5):
+        await stove.async_read(r.POWER_STATE)
+        await stove.async_write(r.TARGET_TEMPERATURE, 24)
+        await stove.async_toggle_power()
+        await stove.async_read(r.POWER_STATE)
+
+    assert [key for key, _, _ in requests] == ["020", "002", "020", "022", "020"]
+    for (_, _, end), (_, start, _), gap in zip(
+        requests[:-1], requests[1:], (0.1, 0.15, 0.1, 0.15), strict=True
+    ):
+        assert start - end >= gap - 0.005
+
+
+@pytest.mark.parametrize(
+    "command,args,expected",
+    [
+        (PelletStove.async_set_power, (True,), [("020", "2"), ("022", None)]),
+        (
+            PelletStove.async_write,
+            (r.TARGET_TEMPERATURE, 24),
+            [("002", None), ("020", "2")],
+        ),
+        (
+            PelletStove.async_set_fan_regulation,
+            ("fan2", "4"),
+            [("020", "11"), ("002", None), ("020", "11")],
+        ),
+    ],
+    ids=["power", "write", "fan"],
+)
+async def test_concurrent_read_cannot_interleave_with_command(
+    http, frames, command, args, expected
+):
+    frames[2]["ram"][2][2] = 0
+    command_started = asyncio.Event()
+    read_started = asyncio.Event()
+    requests = []
+
+    async def respond(url, **kwargs):
+        data = kwargs["data"]
+        requests.append((data["key"], data.get("category")))
+        if len(requests) == 1:
+            command_started.set()
+            await read_started.wait()
+        return _register_reply(data, frames)
+
+    async def concurrent_read(stove):
+        await command_started.wait()
+        read_started.set()
+        await stove.async_read(r.TOTAL_HOURS)
+
+    http.post(URL, callback=respond, repeat=True)
+    http.post(SET_URL, callback=respond, repeat=True)
+    async with PelletStove("stove.example") as stove, asyncio.timeout(5):
+        await asyncio.gather(command(stove, *args), concurrent_read(stove))
+    assert requests == [*expected, ("020", "5")]
+
+
 async def test_off_state_zeroes_stale_values(http, frames):
     frames[2]["ram"][2][2] = 0
     for cat in (2, 11):
