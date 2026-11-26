@@ -4,21 +4,35 @@ from .client import PelletStove
 from .exceptions import (
     PelletStoveConnectionError,
     PelletStoveError,
+    PelletStovePowerOutcomeUnknownError,
     PelletStoveReadOnlyError,
+    PelletStoveRejectedError,
     PelletStoveResponseError,
     PelletStoveValueError,
 )
-from .models import FanRegulation, PowerState, StoveState
+from .models import (
+    TOGGLE_BLOCKED_STATES,
+    FanRegulation,
+    PowerCommandOutcome,
+    PowerResult,
+    PowerState,
+    StoveState,
+)
 from .registers import Register
 
 __all__ = [
+    "TOGGLE_BLOCKED_STATES",
     "FanRegulation",
     "PelletStove",
     "PelletStoveConnectionError",
     "PelletStoveError",
+    "PelletStovePowerOutcomeUnknownError",
     "PelletStoveReadOnlyError",
+    "PelletStoveRejectedError",
     "PelletStoveResponseError",
     "PelletStoveValueError",
+    "PowerCommandOutcome",
+    "PowerResult",
     "PowerState",
     "Register",
     "StoveState",

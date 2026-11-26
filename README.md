@@ -46,7 +46,7 @@ print(f"Power state: {state.power_state.label}")
 | `async_get_state(include_diagnostics=True)` | Read common status and preferences into an immutable `StoveState`. Set `include_diagnostics=False` to skip alarm and usage counters; those fields will be `None`. |
 | `async_read(register)`, `async_read_many(registers)` | Read and decode registers. Batch reads issue one request per register category. |
 | `async_write(register, value)` | Validate and write a register, then return the decoded readback. |
-| `async_set_power(on)` | Toggle only when the reported state requires it. Unknown states and final cleaning block toggles. |
+| `async_set_power(on)` | Toggle only when the reported state requires it and return a `PowerCommandOutcome` (`toggled`, `unchanged`, or `blocked`, plus the state read under the request lock). Unknown states and `TOGGLE_BLOCKED_STATES` (final cleaning, standby, alarms) block toggles. The stove typically reports the new power state a minute or more after a toggle and keeps the old state until then, so do not repeat the command in that window: a second toggle cancels the first. `PelletStovePowerOutcomeUnknownError` means the toggle was sent without a readable acknowledgement. |
 | `async_toggle_power()` | Send the raw toggle command. Prefer `async_set_power` when you know the desired state. |
 | `async_set_fan_regulation(channel, value)` | Set `fan2` or `fan3` to `off`, `1`–`5`, or `auto` while preserving the other channel. |
 | `async_close()` | Close the client-owned session. The async context manager also closes it. |
@@ -54,7 +54,9 @@ print(f"Power state: {state.power_state.label}")
 Register definitions and encoding helpers live in
 [`aiopelletstove.registers`](src/aiopelletstove/registers.py).
 The caller remains responsible for an injected `aiohttp.ClientSession`.
-Commands are serialized per client; use a single client when coordinating writes.
+Each client sends one request at a time, with an idle gap of at least 100 ms
+after a read and 150 ms after a write or power toggle. Polling cannot interrupt
+a command's sequence of requests. Use one client per stove to share the queue.
 
 Unknown power codes retain their integer value with a label of
 `unknown_<code>` and `is_known=False`. The enum reports both active heating and
@@ -70,6 +72,8 @@ other channel.
 | `PelletStoveError` | Base class for client and protocol errors |
 | `PelletStoveConnectionError` | HTTP transport failure or timeout |
 | `PelletStoveResponseError` | Malformed, incomplete, or rejected response |
+| `PelletStoveRejectedError` | Explicit rejection by the stove; a `PelletStoveResponseError` |
+| `PelletStovePowerOutcomeUnknownError` | A power toggle was sent but its acknowledgement was lost or unreadable |
 | `PelletStoveReadOnlyError` | Attempted write to a read-only register |
 | `PelletStoveValueError` | Invalid host or unsupported or out-of-range input; also a `ValueError` |
 

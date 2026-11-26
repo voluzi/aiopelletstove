@@ -48,6 +48,33 @@ ON_STATES = frozenset(
         PowerState.ASHPAN_CLEANING,
     }
 )
+# States in which the effect of the power toggle is undocumented or unsafe.
+TOGGLE_BLOCKED_STATES = frozenset(
+    {
+        PowerState.FINAL_CLEANING,
+        PowerState.STANDBY,
+        PowerState.ALARM,
+        PowerState.ALARM_MEMORY,
+    }
+)
+
+
+class PowerResult(StrEnum):
+    """Outcome of an absolute power command."""
+
+    TOGGLED = "toggled"
+    UNCHANGED = "unchanged"
+    BLOCKED = "blocked"
+
+
+@dataclass(frozen=True, slots=True)
+class PowerCommandOutcome:
+    """Result of ``async_set_power`` and the power state read under its lock."""
+
+    result: PowerResult
+    state: PowerState
+
+
 POWER_STATE_LABELS = {
     PowerState.OFF: "off",
     PowerState.AWAITING_FLAME_1: "awaiting_flame",

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiopelletstove"
-version = "1.0.0"
+version = "1.1.0"
 description = "Async register protocol client for Wi-Fi pellet stoves"
 readme = "README.md"
 requires-python = ">=3.11"
